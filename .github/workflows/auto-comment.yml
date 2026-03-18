@@ -4,8 +4,8 @@ on:
   issues:
     types: [opened, labeled]
 
-permissions:
-  issues: write
+# Use broad permissions to avoid repo-level default restrictions preventing issue writes.
+permissions: write-all
 
 jobs:
   auto_comment_and_close:
@@ -16,32 +16,36 @@ jobs:
         with:
           script: |
             const message = 'Thank you for your contribution!';
-            const issue = context.payload.issue;
 
-            if (!issue) {
-              core.info('No issue payload found.');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue?.number;
+
+            if (!issue_number) {
+              core.info('No issue number in payload; skipping.');
               return;
             }
+
+            // Fetch the latest issue data to ensure labels/state are up to date.
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number });
 
             if (issue.state === 'closed') {
-              core.info('Issue is already closed.');
+              core.info('Issue already closed; skipping.');
               return;
             }
 
-            const labels = (issue.labels || []).map(l => (l.name || '').toLowerCase());
-            const targets = new Set(['feedback', 'suggestion']);
-            const shouldHandle = labels.some(l => targets.has(l));
+            const labels = (issue.labels || []).map(l => {
+              if (typeof l === 'string') return l.toLowerCase();
+              return (l.name || '').toLowerCase();
+            });
 
-            core.info(`Issue #${issue.number} labels: ${labels.join(', ')}`);
+            const shouldHandle = labels.includes('feedback') || labels.includes('suggestion');
+            core.info(`Issue #${issue_number} labels: ${labels.join(', ')}`);
 
             if (!shouldHandle) {
               core.info('No matching labels found; skipping.');
               return;
             }
-
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = issue.number;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner,
@@ -53,22 +57,11 @@ jobs:
             const alreadyCommented = comments.some(c => (c.body || '').trim() === message);
 
             if (!alreadyCommented) {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: message,
-              });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: message });
               core.info('Comment added.');
             } else {
               core.info('Comment already exists; not adding another.');
             }
 
-            await github.rest.issues.update({
-              owner,
-              repo,
-              issue_number,
-              state: 'closed',
-            });
-
+            await github.rest.issues.update({ owner, repo, issue_number, state: 'closed' });
             core.info('Issue closed.');
