@@ -8,42 +8,67 @@ permissions:
   issues: write
 
 jobs:
-  comment-and-close:
+  auto_comment_and_close:
     runs-on: ubuntu-latest
     steps:
-      - name: Comment and close if labeled feedback or suggestion
+      - name: Comment and close when labeled
         uses: actions/github-script@v7
         with:
           script: |
+            const message = 'Thank you for your contribution!';
+            const issue = context.payload.issue;
+
+            if (!issue) {
+              core.info('No issue payload found.');
+              return;
+            }
+
+            if (issue.state === 'closed') {
+              core.info('Issue is already closed.');
+              return;
+            }
+
+            const labels = (issue.labels || []).map(l => (l.name || '').toLowerCase());
+            const targets = new Set(['feedback', 'suggestion']);
+            const shouldHandle = labels.some(l => targets.has(l));
+
+            core.info(`Issue #${issue.number} labels: ${labels.join(', ')}`);
+
+            if (!shouldHandle) {
+              core.info('No matching labels found; skipping.');
+              return;
+            }
+
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const issue_number = context.payload.issue.number;
+            const issue_number = issue.number;
 
-            const labels = (context.payload.issue.labels || []).map(l => l.name);
-            const triggerLabels = new Set(['feedback', 'suggestion']);
-            const shouldAct = labels.some(l => triggerLabels.has(l));
-
-            if (!shouldAct) {
-              core.info(`No matching label found on issue #${issue_number}. Labels: ${labels.join(', ')}`);
-              return;
-            }
-
-            // Avoid double-posting if reopened/relabeled multiple times
-            if (context.payload.issue.state === 'closed') {
-              core.info(`Issue #${issue_number} is already closed. Skipping.`);
-              return;
-            }
-
-            await github.rest.issues.createComment({
+            const { data: comments } = await github.rest.issues.listComments({
               owner,
               repo,
               issue_number,
-              body: 'Thank you for your contribution!'
+              per_page: 100,
             });
+
+            const alreadyCommented = comments.some(c => (c.body || '').trim() === message);
+
+            if (!alreadyCommented) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: message,
+              });
+              core.info('Comment added.');
+            } else {
+              core.info('Comment already exists; not adding another.');
+            }
 
             await github.rest.issues.update({
               owner,
               repo,
               issue_number,
-              state: 'closed'
+              state: 'closed',
             });
+
+            core.info('Issue closed.');
