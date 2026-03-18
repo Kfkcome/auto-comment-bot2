@@ -1,0 +1,49 @@
+name: Auto comment and close for feedback/suggestion
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  comment-and-close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close if labeled feedback or suggestion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+
+            const labels = (context.payload.issue.labels || []).map(l => l.name);
+            const triggerLabels = new Set(['feedback', 'suggestion']);
+            const shouldAct = labels.some(l => triggerLabels.has(l));
+
+            if (!shouldAct) {
+              core.info(`No matching label found on issue #${issue_number}. Labels: ${labels.join(', ')}`);
+              return;
+            }
+
+            // Avoid double-posting if reopened/relabeled multiple times
+            if (context.payload.issue.state === 'closed') {
+              core.info(`Issue #${issue_number} is already closed. Skipping.`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: 'Thank you for your contribution!'
+            });
+
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number,
+              state: 'closed'
+            });
